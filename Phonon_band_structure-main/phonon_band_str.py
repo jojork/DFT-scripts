@@ -2,47 +2,67 @@ import numpy as np
 from phonopy import Phonopy
 from phonopy.structure.atoms import PhonopyAtoms
 from ase.io import read
-from gpaw import GPAW, FermiDirac
+from ase import Atoms
+from gpaw import GPAW, PW, FermiDirac, mpi
 import matplotlib.pyplot as plt
 import os
 import pickle
 from datetime import datetime
 
-# Create output directory
-os.makedirs("phonopy_outputs", exist_ok=True)
+# ==================================================
+# MPI INFO
+# ==================================================
+rank = mpi.world.rank
+size = mpi.world.size
 
-# Progress tracking
+# ==================================================
+# OUTPUT SETUP
+# ==================================================
+if rank == 0:
+    os.makedirs("phonopy_outputs", exist_ok=True)
+
 CHECKPOINT_FILE = "phonopy_outputs/checkpoint.pkl"
 
-# Open progress log
-progress_log = open("phonopy_outputs/progress_log.txt", "a")
+if rank == 0:
+    progress_log = open("phonopy_outputs/progress_log.txt", "a")
+else:
+    progress_log = None
+
 
 def log(message):
-    """Write to both screen and log file"""
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    full_message = f"[{timestamp}] {message}"
-    print(full_message)
-    progress_log.write(full_message + "\n")
-    progress_log.flush()
+    if rank == 0:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        full_message = f"[{timestamp}] {message}"
+        print(full_message)
+        progress_log.write(full_message + "\n")
+        progress_log.flush()
+
 
 def save_checkpoint(stage, data):
-    """Save progress checkpoint"""
-    checkpoint = {'stage': stage, 'data': data}
-    with open(CHECKPOINT_FILE, 'wb') as f:
-        pickle.dump(checkpoint, f)
-    log(f"✓ Checkpoint saved: {stage}")
+    if rank == 0:
+        checkpoint = {'stage': stage, 'data': data}
+        with open(CHECKPOINT_FILE, 'wb') as f:
+            pickle.dump(checkpoint, f)
+        log(f"✓ Checkpoint saved: {stage}")
+
 
 def load_checkpoint():
-    """Load progress checkpoint"""
-    if os.path.exists(CHECKPOINT_FILE):
+    if rank == 0 and os.path.exists(CHECKPOINT_FILE):
         with open(CHECKPOINT_FILE, 'rb') as f:
             return pickle.load(f)
     return None
 
+
 # ==================================================
-# Check for existing checkpoint
+# START MESSAGE
 # ==================================================
+if rank == 0:
+    print("=" * 60)
+    print(f"Running with {size} MPI cores")
+    print("=" * 60)
+
 checkpoint = load_checkpoint()
+
 if checkpoint:
     log("=" * 60)
     log(f"RESUMING FROM CHECKPOINT: {checkpoint['stage']}")
@@ -53,7 +73,7 @@ else:
     log("=" * 60)
 
 # ==================================================
-# 1) Read structure
+# 1) READ STRUCTURE
 # ==================================================
 ase_atoms = read("input_structure.vasp")   # generic name
 log(f"Structure: {ase_atoms.get_chemical_formula()}, {len(ase_atoms)} atoms")
@@ -65,14 +85,13 @@ phonopy_atoms = PhonopyAtoms(
 )
 
 # ==================================================
-# 2) Create Phonopy object
+# 2) CREATE PHONOPY OBJECT
 # ==================================================
 phonon = Phonopy(
     phonopy_atoms,
     supercell_matrix=[[3, 0, 0],
                       [0, 3, 0],
                       [0, 0, 1]],
-    primitive_matrix=None
 )
 
 log(f"Supercell: {len(phonon.supercell.symbols)} atoms")
@@ -83,10 +102,9 @@ log("")
 supercells = phonon.supercells_with_displacements
 
 # ==================================================
-# 3) Calculate forces (RESUMABLE)
+# 3) FORCE CALCULATIONS
 # ==================================================
 if checkpoint and checkpoint['stage'] == 'forces_done':
-    log("Loading saved forces from checkpoint...")
     forces_list = checkpoint['data']['forces_list']
     energies_list = checkpoint['data']['energies_list']
     log(f"✓ Loaded {len(forces_list)} force calculations")
@@ -94,209 +112,156 @@ else:
     log("=" * 60)
     log("CALCULATING FORCES")
     log("=" * 60)
-    
+
     calc = GPAW(
-        mode="lcao",
+        mode=PW(600),
         xc="PBE",
         kpts=(4, 4, 1),
         occupations=FermiDirac(0.01),
         symmetry="off",
         txt="phonopy_outputs/gpaw_calculation.txt"
     )
-    
+
     forces_list = []
     energies_list = []
-    forces_csv = open("phonopy_outputs/forces_summary.csv", "w")
-    forces_csv.write("Displacement_ID,Energy_eV,Max_Force_eV_per_A,Mean_Force_eV_per_A\n")
-    
+
+    if rank == 0:
+        forces_csv = open("phonopy_outputs/forces_summary.csv", "w")
+        forces_csv.write("ID,Energy_eV,Max_Force,Mean_Force\n")
+
     for i, scell in enumerate(supercells):
         log(f"Displacement {i+1}/{len(supercells)}")
-        
-        from ase import Atoms
+
         ase_scell = Atoms(
             symbols=scell.symbols,
             scaled_positions=scell.scaled_positions,
             cell=scell.cell,
             pbc=True
         )
-        
+
         ase_scell.calc = calc
         energy = ase_scell.get_potential_energy()
         forces = ase_scell.get_forces()
-        
+
         forces_list.append(forces)
         energies_list.append(energy)
-        
+
         max_force = np.max(np.abs(forces))
         mean_force = np.mean(np.abs(forces))
-        
+
         log(f"  Energy: {energy:.6f} eV")
         log(f"  Max force: {max_force:.6f} eV/A")
         log("")
-        
-        forces_csv.write(f"{i},{energy:.8f},{max_force:.8f},{mean_force:.8f}\n")
-        
-        # Save individual force file
-        force_file = f"phonopy_outputs/forces_displacement_{i:03d}.txt"
-        with open(force_file, "w") as f:
-            f.write(f"# Forces for displacement {i}\n")
-            f.write(f"# Energy: {energy:.8f} eV\n")
-            f.write(f"# Atom  Symbol  Fx  Fy  Fz  |F|\n")
-            for atom_idx, (symbol, force) in enumerate(zip(scell.symbols, forces)):
-                fmag = np.linalg.norm(force)
-                f.write(f"{atom_idx:4d}  {symbol:2s}  {force[0]:12.6f}  {force[1]:12.6f}  {force[2]:12.6f}  {fmag:12.6f}\n")
-    
-    forces_csv.close()
-    log("✓ All forces calculated")
-    
-    # Save checkpoint
+
+        if rank == 0:
+            forces_csv.write(f"{i},{energy:.8f},{max_force:.8f},{mean_force:.8f}\n")
+
+    if rank == 0:
+        forces_csv.close()
+
     save_checkpoint('forces_done', {
         'forces_list': forces_list,
         'energies_list': energies_list
     })
 
 # ==================================================
-# 4) Build force constants
+# 4) FORCE CONSTANTS
 # ==================================================
-log("")
-log("=" * 60)
 log("BUILDING FORCE CONSTANTS")
-log("=" * 60)
-
 phonon.forces = forces_list
 phonon.produce_force_constants()
 log("✓ Force constants calculated")
 
 # ==================================================
-# 5) Gamma frequencies
+# 4.1) WRITE PHONON ANIMATION
 # ==================================================
-log("")
-log("=" * 60)
+if rank == 0:
+    log("WRITING PHONON ANIMATION")
+
+    try:
+        phonon.write_animation(
+            q_point=[0, 0, 0],
+            anime_type='xyz',
+            band_index=0,
+            amplitude=0.3,
+            filename="phonopy_outputs/anime.xyz"
+        )
+
+        log("✓ Animation saved: phonopy_outputs/anime.xyz")
+
+    except Exception as e:
+        log(f"Animation generation failed: {e}")
+
+# ==================================================
+# 5) GAMMA FREQUENCIES
+# ==================================================
 log("GAMMA-POINT FREQUENCIES")
-log("=" * 60)
 
 phonon.run_mesh([20, 20, 1])
-mesh_dict = phonon.get_mesh_dict()
-gamma_freqs = mesh_dict['frequencies'][0]
+gamma_freqs = phonon.get_mesh_dict()['frequencies'][0]
 
-log("\nFrequencies at Gamma:")
-log("Mode  Frequency(THz)  Frequency(cm^-1)  Type")
-log("-" * 60)
-
-gamma_csv = open("phonopy_outputs/gamma_frequencies.csv", "w")
-gamma_csv.write("Mode,Frequency_THz,Frequency_cm_inv,Type\n")
+if rank == 0:
+    gamma_csv = open("phonopy_outputs/gamma_frequencies.csv", "w")
+    gamma_csv.write("Mode,THz,cm^-1\n")
 
 for i, f in enumerate(gamma_freqs):
     cm_inv = f * 33.356
-    mode_type = "acoustic" if i < 3 else "optical"
-    log(f"{i:4d}  {f:14.6f}  {cm_inv:16.2f}  {mode_type}")
-    gamma_csv.write(f"{i},{f:.8f},{cm_inv:.4f},{mode_type}\n")
+    log(f"{i:3d}  {f:12.6f} THz  {cm_inv:10.2f} cm^-1")
 
-gamma_csv.close()
+    if rank == 0:
+        gamma_csv.write(f"{i},{f:.8f},{cm_inv:.4f}\n")
+
+if rank == 0:
+    gamma_csv.close()
 
 if np.any(gamma_freqs < -0.01):
-    log("\n⚠ WARNING: Imaginary frequencies detected")
+    log("⚠ Imaginary frequencies detected")
 else:
-    log("\n✓ All frequencies positive")
+    log("✓ All Gamma frequencies positive")
 
 # ==================================================
-# 6) Band structure
+# 6) BAND STRUCTURE
 # ==================================================
-log("")
-log("=" * 60)
 log("CALCULATING BAND STRUCTURE")
-log("=" * 60)
 
-bands_dict = {
-    'path': [
-        [[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]],
-        [[0.5, 0.0, 0.0], [0.5, 0.5, 0.0]],
-        [[0.5, 0.5, 0.0], [0.0, 0.5, 0.0]],
-        [[0.0, 0.5, 0.0], [0.0, 0.0, 0.0]]
-    ],
-    'labels': ['$\\Gamma$', 'X', 'M', 'Y', '$\\Gamma$'],
-    'npoints': 51
-}
+path = [
+    [[0,0,0],[0.5,0,0]],
+    [[0.5,0,0],[0.5,0.5,0]],
+    [[0.5,0.5,0],[0,0.5,0]],
+    [[0,0.5,0],[0,0,0]]
+]
 
-phonon.run_band_structure(bands_dict['path'], bands_dict['npoints'])
-bs_dict = phonon.get_band_structure_dict()
-log("✓ Band structure calculated")
+phonon.run_band_structure(path, 51)
+bs = phonon.get_band_structure_dict()
 
 # ==================================================
-# 7) Plot
+# 7) PLOT
 # ==================================================
-log("")
-log("=" * 60)
-log("PLOTTING")
-log("=" * 60)
+if rank == 0:
+    distances = np.concatenate(bs['distances'])
+    freqs = np.concatenate(bs['frequencies']) * 33.356
 
-distances_list = bs_dict['distances']
-frequencies_list = bs_dict['frequencies']
+    fig, ax = plt.subplots(figsize=(8,6))
 
-all_distances = []
-all_frequencies = []
+    for i in range(freqs.shape[1]):
+        ax.plot(distances, freqs[:, i], 'b-')
 
-for segment_idx in range(len(distances_list)):
-    segment_distances = np.array(distances_list[segment_idx])
-    segment_freqs = np.array(frequencies_list[segment_idx])
-    all_distances.append(segment_distances)
-    all_frequencies.append(segment_freqs)
+    ax.axhline(0, color='k', linestyle='--', linewidth=0.5)
+    ax.set_xlabel("Wave vector")
+    ax.set_ylabel("Frequency (cm$^{-1}$)")
+    ax.set_title("Phonon Band Structure")
+    ax.set_ylim(-200, 1000)
 
-distances_array = np.concatenate(all_distances)
-frequencies_array = np.concatenate(all_frequencies)
+    plt.tight_layout()
+    plt.savefig("phonopy_outputs/phonon_bandstructure.png", dpi=300)
+    plt.show()
 
-frequencies_cm = frequencies_array * 33.356
+    phonon.save("phonopy_outputs/phonopy_params.yaml")
 
-log(f"Data shape: {frequencies_cm.shape}")
+    log("=" * 60)
+    log("COMPLETE")
+    log("=" * 60)
 
-bands_csv = open("phonopy_outputs/phonon_bands.csv", "w")
-bands_csv.write("k_distance")
-for i in range(frequencies_cm.shape[1]):
-    bands_csv.write(f",band_{i}")
-bands_csv.write("\n")
+    progress_log.close()
 
-for i in range(len(distances_array)):
-    bands_csv.write(f"{distances_array[i]:.6f}")
-    for band_idx in range(frequencies_cm.shape[1]):
-        bands_csv.write(f",{frequencies_cm[i][band_idx]:.4f}")
-    bands_csv.write("\n")
-
-bands_csv.close()
-log("✓ Data saved to CSV")
-
-fig, ax = plt.subplots(figsize=(8, 6))
-
-for band_idx in range(frequencies_cm.shape[1]):
-    ax.plot(distances_array, frequencies_cm[:, band_idx], 'b-', linewidth=1.5)
-
-ax.set_xlabel('Wave vector', fontsize=12)
-ax.set_ylabel('Frequency (cm$^{-1}$)', fontsize=12)
-ax.set_title('Phonon Band Structure', fontsize=13)   # generic title
-ax.axhline(0, color='k', linewidth=0.5, linestyle='--', alpha=0.5)
-ax.set_ylim(bottom=-200, top=1000)
-ax.grid(True, alpha=0.3, axis='y')
-
-segment_positions = [0]
-for segment in all_distances:
-    segment_positions.append(segment[-1])
-
-for pos, label in zip(segment_positions, bands_dict['labels']):
-    ax.axvline(pos, color='k', linewidth=0.5, alpha=0.5)
-ax.set_xticks(segment_positions)
-ax.set_xticklabels(bands_dict['labels'])
-
-plt.tight_layout()
-plt.savefig('phonopy_outputs/phonon_bandstructure.png', dpi=300)
-log("✓ Plot saved")
-plt.show()
-
-phonon.save('phonopy_outputs/phonopy_params.yaml')
-
-log("")
-log("=" * 60)
-log("COMPLETE")
-log("=" * 60)
-
-progress_log.close()
-print("\n✓ All outputs in phonopy_outputs/")
-print("✓ To restart from scratch: rm phonopy_outputs/checkpoint.pkl")
+    print("\n✓ All outputs saved in phonopy_outputs/")
