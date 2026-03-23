@@ -15,7 +15,7 @@ for l in llist:
     b = l * 1.732  # approximate √3 * a
 
     # Build atomic structure 
-    atoms = Atoms('your element', [(0, 0, 10), (l / 2, b / 2, 10)])
+    atoms = Atoms('X2', [(0, 0, 10), (l / 2, b / 2, 10)])  # generic element
     atoms.set_pbc((True, True, True))
     atoms.set_cell((l, b, 20.0))
 
@@ -26,11 +26,11 @@ for l in llist:
                 kpts=(10, 10, 1),
                 occupations=FermiDirac(0.05),
                 convergence={'energy': 1e-5},
-                txt=f'chain_lin_{l:.2f}.txt')
+                txt=f'calculation_{l:.2f}.txt')   # generic name
 
     atoms.calc = calc
 
-    # Get potential energy (optional optimization commented)
+    # Get potential energy
     e = atoms.get_potential_energy()
     elist.append(e)
     print(f"Step: l={l:.2f} Å → E={e:.6f} eV")
@@ -40,11 +40,8 @@ for l in llist:
     txt_filename = f'structure_{l:.2f}.txt'
     calc.write(f'structure_{l:.2f}.gpw', mode='all')
 
-
-    # Save .xyz (for ASE or visualization)
     write(xyz_filename, atoms)
 
-    # Save .txt (custom readable format)
     with open(txt_filename, 'w') as f:
         f.write(f"Lattice parameters (Å): a={l:.6f}, b={b:.6f}, c=20.000000\n")
         f.write("Atomic positions (Å):\n")
