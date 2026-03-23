@@ -55,7 +55,7 @@ else:
 # ==================================================
 # 1) Read structure
 # ==================================================
-ase_atoms = read("Ag_relax.vasp")
+ase_atoms = read("input_structure.vasp")   # generic name
 log(f"Structure: {ase_atoms.get_chemical_formula()}, {len(ase_atoms)} atoms")
 
 phonopy_atoms = PhonopyAtoms(
@@ -230,11 +230,9 @@ log("=" * 60)
 log("PLOTTING")
 log("=" * 60)
 
-# Extract and convert data
 distances_list = bs_dict['distances']
 frequencies_list = bs_dict['frequencies']
 
-# Convert to proper numpy arrays
 all_distances = []
 all_frequencies = []
 
@@ -244,16 +242,13 @@ for segment_idx in range(len(distances_list)):
     all_distances.append(segment_distances)
     all_frequencies.append(segment_freqs)
 
-# Concatenate all segments
 distances_array = np.concatenate(all_distances)
 frequencies_array = np.concatenate(all_frequencies)
 
-# Convert THz to cm^-1
 frequencies_cm = frequencies_array * 33.356
 
 log(f"Data shape: {frequencies_cm.shape}")
 
-# Save to CSV
 bands_csv = open("phonopy_outputs/phonon_bands.csv", "w")
 bands_csv.write("k_distance")
 for i in range(frequencies_cm.shape[1]):
@@ -269,7 +264,6 @@ for i in range(len(distances_array)):
 bands_csv.close()
 log("✓ Data saved to CSV")
 
-# Plot
 fig, ax = plt.subplots(figsize=(8, 6))
 
 for band_idx in range(frequencies_cm.shape[1]):
@@ -277,12 +271,11 @@ for band_idx in range(frequencies_cm.shape[1]):
 
 ax.set_xlabel('Wave vector', fontsize=12)
 ax.set_ylabel('Frequency (cm$^{-1}$)', fontsize=12)
-ax.set_title(f'Phonon Band Structure - {ase_atoms.get_chemical_formula()}', fontsize=13)
+ax.set_title('Phonon Band Structure', fontsize=13)   # generic title
 ax.axhline(0, color='k', linewidth=0.5, linestyle='--', alpha=0.5)
 ax.set_ylim(bottom=-200, top=1000)
 ax.grid(True, alpha=0.3, axis='y')
 
-# High-symmetry point markers
 segment_positions = [0]
 for segment in all_distances:
     segment_positions.append(segment[-1])
@@ -297,7 +290,6 @@ plt.savefig('phonopy_outputs/phonon_bandstructure.png', dpi=300)
 log("✓ Plot saved")
 plt.show()
 
-# Save phonopy params
 phonon.save('phonopy_outputs/phonopy_params.yaml')
 
 log("")
