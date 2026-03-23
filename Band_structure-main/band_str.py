@@ -1,5 +1,5 @@
 # Band_structure
-this script helps to find band structure
+# this script helps to find band structure
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,7 +11,7 @@ from gpaw.response.df import DielectricFunction
 # ------------------------------------------------------------
 # Load ground state
 # ------------------------------------------------------------
-calc = GPAW('your__file_name.gpw', txt=None)
+calc = GPAW('input_file.gpw', txt=None)   # generic name
 atoms = calc.get_atoms()
 
 fermi = calc.get_fermi_level()
@@ -26,10 +26,10 @@ print("Calculating band structure...")
 kpts_band = []
 
 segments = [
-    ([0.0, 0.0, 0.0], [0.5, 0.0, 0.0]),  # Γ → X
-    ([0.5, 0.0, 0.0], [0.5, 0.5, 0.0]),  # X → corner
-    ([0.5, 0.5, 0.0], [0.0, 0.5, 0.0]),  # corner → Y
-    ([0.0, 0.5, 0.0], [0.0, 0.0, 0.0])   # Y → Γ
+    ([0.0, 0.0, 0.0], [0.5, 0.0, 0.0]),
+    ([0.5, 0.0, 0.0], [0.5, 0.5, 0.0]),
+    ([0.5, 0.5, 0.0], [0.0, 0.5, 0.0]),
+    ([0.0, 0.5, 0.0], [0.0, 0.0, 0.0])
 ]
 
 nseg = 25
@@ -40,8 +40,8 @@ for start, end in segments:
 kpts_band.append([0.0, 0.0, 0.0])
 
 calc_bs = GPAW(
-    'structure_2.06.gpw',   # MUST exist
-    kpts=kpts_band,    # <-- list, NOT dict
+    'input_file.gpw',   # generic name
+    kpts=kpts_band,
     symmetry='off',
     txt='band_structure.txt'
 )
@@ -53,7 +53,7 @@ bs = calc_bs.band_structure()
 bs.plot(filename='band_structure.png', show=False)
 
 # ============================================================
-# SAVE BAND STRUCTURE TO CSV (FIXED)
+# SAVE BAND STRUCTURE TO CSV
 # ============================================================
 print("Saving band structure to CSV...")
 
@@ -61,8 +61,7 @@ energies = bs.energies  # eV
 
 # Handle spin dimension safely
 if energies.ndim == 3:
-    # shape = (nspins, nkpts, nbands)
-    energies = energies[0]   # take spin-up (or only spin)
+    energies = energies[0]
 
 nkpts, nbands = energies.shape
 
