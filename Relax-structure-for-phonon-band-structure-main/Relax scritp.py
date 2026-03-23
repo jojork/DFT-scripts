@@ -1,18 +1,18 @@
 from ase.io import read, write
 from ase.optimize import BFGS
 from ase.filters import UnitCellFilter
-from gpaw import GPAW,PW, FermiDirac
+from gpaw import GPAW, PW, FermiDirac
 
 # Read structure
-atoms = read(" put your vasp or xyz structure file to call")
+atoms = read("input_structure.xyz")   # generic name
 
 print("Structure:", atoms.get_chemical_formula())
 
 # ---------- Set magnetic moments ----------
 magmoms = []
 for atom in atoms:
-    if atom.symbol == "Fe":
-        magmoms.append(2.5)   # typical Fe moment
+    if atom.symbol == "X":   # generic magnetic element
+        magmoms.append(2.5)
     else:
         magmoms.append(0.0)
 
@@ -22,7 +22,7 @@ atoms.set_initial_magnetic_moments(magmoms)
 calc = GPAW(
     mode=PW(700),
     xc="PBE",
-    kpts=(12, 12, 1),   # Use (12,12,1) if 2D
+    kpts=(12, 12, 1),
     occupations=FermiDirac(0.1),
     spinpol=True,
     symmetry="off",
@@ -43,5 +43,5 @@ opt.run(fmax=0.03)
 print("\nRelaxation complete!")
 
 # ---------- Save relaxed structure ----------
-write("relaxed.vasp", atoms, vasp5=True)
-print("Relaxed structure saved as relaxed.vasp")
+write("relaxed_structure.vasp", atoms, vasp5=True)
+print("Relaxed structure saved as relaxed_structure.vasp")
